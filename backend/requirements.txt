@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
+prometheus-client==0.21.0
+numpy==2.1.3
