@@ -54,6 +54,13 @@ MODEL_METRIC_INGEST = Counter(
     "Offline model accuracy / validation metrics ingested",
     ["model_name"],
 )
+PRIVACY_EXPORT_REQUESTS = Counter("streaming_privacy_portable_export_total", "User data export requests")
+PRIVACY_ERASURE_REQUESTS = Counter("streaming_privacy_erasure_total", "User data erasure requests")
+FAIRNESS_AUDIT_INGEST = Counter(
+    "streaming_fairness_audit_reports_total",
+    "Fairness / bias slice metrics ingested",
+    ["model_name"],
+)
 
 
 def metrics_response():

@@ -60,6 +60,14 @@ chmod +x scripts/transcode_abr.sh
 
 Map manifest rung heights to the ladder in `quality_rl.LADDER` so server and client stay aligned.
 
+## Ethics & responsible use
+
+| Topic | What is implemented |
+|--------|----------------------|
+| **Data privacy** | **`GET /privacy/transparency`** — categories, purposes, rights, encryption/compliance notes (configure **`PRIVACY_POLICY_*`** / **`DATA_PROTECTION_CONTACT`** via env). **`PUT /privacy/consent`** / **`GET /privacy/consent/{user_id}`** — granular flags: personalization, analytics, model-training datasets. **`GET /privacy/export/{user_id}`** — portable JSON. **`POST /privacy/erasure`** with **`confirm=true`** — deletes user rows (DB + in-memory RL slot); pair with TLS and encrypted Postgres in production. |
+| **Fairness & bias** | **`POST /ethics/fairness-report`** / **`GET /ethics/fairness-reports`** — store slice metrics (e.g. demographic parity) from offline audits; training export **respects** `consent_model_training` and **`consent_analytics`** for user-device ingest. |
+| **Transparency & control** | Transparency payload documents all relevant API paths; users who set **`consent_personalization=false`** receive **403** on viewing, recommendations, feedback, and quality-feedback routes, and are **excluded** from collaborative filtering aggregates. |
+
 ## Technical challenges (and how this repo addresses them)
 
 | Challenge | Approach |

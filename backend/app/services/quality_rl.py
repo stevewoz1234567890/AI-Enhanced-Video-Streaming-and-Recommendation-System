@@ -143,5 +143,8 @@ class QualityAgent:
         td_target = reward
         qrow[action_i] += self.learning_rate * (td_target - qrow[action_i])
 
+    def forget_user(self, user_id: str) -> None:
+        self._last.pop(user_id, None)
+
 
 agent = QualityAgent()

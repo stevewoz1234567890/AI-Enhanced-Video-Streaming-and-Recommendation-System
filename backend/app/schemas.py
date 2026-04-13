@@ -147,3 +147,55 @@ class FeedbackSummaryResponse(BaseModel):
     user_interactions_total: int
     network_samples_total: int
     ingestion_events_total: int
+
+
+class PrivacyConsentIn(BaseModel):
+    user_id: str = Field(max_length=64)
+    consent_personalization: bool | None = None
+    consent_analytics: bool | None = None
+    consent_model_training: bool | None = None
+    policy_version_ack: str | None = Field(default=None, max_length=64)
+
+
+class PrivacyConsentOut(BaseModel):
+    user_id: str
+    consent_personalization: bool
+    consent_analytics: bool
+    consent_model_training: bool
+    policy_version_ack: str | None
+    updated_at: datetime | None
+
+
+class ErasureRequest(BaseModel):
+    user_id: str = Field(max_length=64)
+    confirm: bool = False
+
+
+class TransparencyResponse(BaseModel):
+    policy_version: str
+    policy_url: str
+    data_protection_contact: str
+    data_categories: list[str]
+    processing_purposes: list[str]
+    user_rights_summary: list[str]
+    encryption_notes: list[str]
+    compliance_notes: list[str]
+    api_endpoints: dict[str, str]
+
+
+class FairnessReportIn(BaseModel):
+    model_name: str = Field(max_length=64)
+    slice_name: str = Field(max_length=128)
+    metric_name: str = Field(max_length=64)
+    metric_value: float
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class FairnessReportOut(BaseModel):
+    id: int
+    model_name: str
+    slice_name: str
+    metric_name: str
+    metric_value: float
+    extra: dict[str, Any]
+    created_at: datetime

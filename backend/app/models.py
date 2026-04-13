@@ -19,6 +19,23 @@ class UserPreference(Base):
     )
 
 
+class UserPrivacySettings(Base):
+    """
+    Opt-out style controls (default allow). Production may require explicit opt-in per GDPR/CCPA programs.
+    """
+
+    __tablename__ = "user_privacy_settings"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    consent_personalization: Mapped[bool] = mapped_column(Boolean, default=True)
+    consent_analytics: Mapped[bool] = mapped_column(Boolean, default=True)
+    consent_model_training: Mapped[bool] = mapped_column(Boolean, default=True)
+    policy_version_ack: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ViewingEvent(Base):
     """Implicit/explicit feedback for collaborative filtering and hybrid recommenders."""
 
@@ -67,6 +84,20 @@ class TrainingQualityMetric(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     model_name: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[str] = mapped_column(String(32), index=True)
+    metric_name: Mapped[str] = mapped_column(String(64))
+    metric_value: Mapped[float] = mapped_column(Float)
+    extra: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FairnessAuditRecord(Base):
+    """Bias / fairness slices from offline audits (fairness-aware ML, representative data checks)."""
+
+    __tablename__ = "fairness_audit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_name: Mapped[str] = mapped_column(String(64), index=True)
+    slice_name: Mapped[str] = mapped_column(String(128), index=True)
     metric_name: Mapped[str] = mapped_column(String(64))
     metric_value: Mapped[float] = mapped_column(Float)
     extra: Mapped[dict] = mapped_column(JSON, nullable=False)

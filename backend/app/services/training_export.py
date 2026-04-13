@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import IngestionEvent, NetworkSample, UserInteraction, ViewingEvent
+from app.models import IngestionEvent, NetworkSample, UserInteraction, UserPrivacySettings, ViewingEvent
 
 
 async def collect_training_records(
@@ -34,8 +34,14 @@ async def collect_training_records(
             )
 
     if "viewing" in stream_set or "viewing_events" in stream_set:
+        opt_out_training = select(UserPrivacySettings.user_id).where(
+            UserPrivacySettings.consent_model_training.is_(False)
+        )
         res = await session.execute(
-            select(ViewingEvent).order_by(ViewingEvent.id.desc()).limit(limit_per_stream)
+            select(ViewingEvent)
+            .where(~ViewingEvent.user_id.in_(opt_out_training))
+            .order_by(ViewingEvent.id.desc())
+            .limit(limit_per_stream)
         )
         for v in res.scalars().all():
             out.append(
@@ -51,8 +57,19 @@ async def collect_training_records(
             )
 
     if "ingestion" in stream_set or "ingestion_events" in stream_set:
+        opt_out_analytics = select(UserPrivacySettings.user_id).where(
+            UserPrivacySettings.consent_analytics.is_(False)
+        )
         res = await session.execute(
-            select(IngestionEvent).order_by(IngestionEvent.id.desc()).limit(limit_per_stream)
+            select(IngestionEvent)
+            .where(
+                or_(
+                    IngestionEvent.source != "user_device",
+                    ~IngestionEvent.origin_id.in_(opt_out_analytics),
+                )
+            )
+            .order_by(IngestionEvent.id.desc())
+            .limit(limit_per_stream)
         )
         for e in res.scalars().all():
             out.append(
@@ -69,8 +86,14 @@ async def collect_training_records(
             )
 
     if "interactions" in stream_set or "user_interactions" in stream_set:
+        opt_out_training = select(UserPrivacySettings.user_id).where(
+            UserPrivacySettings.consent_model_training.is_(False)
+        )
         res = await session.execute(
-            select(UserInteraction).order_by(UserInteraction.id.desc()).limit(limit_per_stream)
+            select(UserInteraction)
+            .where(~UserInteraction.user_id.in_(opt_out_training))
+            .order_by(UserInteraction.id.desc())
+            .limit(limit_per_stream)
         )
         for u in res.scalars().all():
             out.append(
