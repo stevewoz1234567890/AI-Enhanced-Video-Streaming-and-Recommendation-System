@@ -34,6 +34,16 @@ RECOMMENDATION_FIT_SECONDS = Histogram(
     "Time to refit MF + neural scorer",
     buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
+INGESTION_EVENTS = Counter(
+    "streaming_ingestion_events_total",
+    "Unified data aggregator ingest calls",
+    ["source"],
+)
+USER_INTERACTIONS = Counter(
+    "streaming_user_interactions_total",
+    "User interaction feedback events",
+    ["interaction_type"],
+)
 
 
 def metrics_response():

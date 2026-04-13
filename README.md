@@ -17,6 +17,7 @@ This repository implements the **control plane** for the architecture described 
 | SD-WAN | Operational routing layer; metrics still land in probes/Prometheus |
 | Video content analysis | `POST /content/analyze` — **CNN** (ResNet-18 / ImageNet) on sampled frames, **GRU** over frame embeddings for transition / scene-change cues, **NLP** (TF–IDF + theme seeds; transformer-ready) on optional transcript |
 | Viewing habits & recommendations | `POST /viewing/event` logs watch time / ratings; `GET /recommendations/{user_id}` blends **matrix factorization** (TruncatedSVD / collaborative filtering) with a **PyTorch MLP**; cold-start uses popularity. TensorFlow can replace the MLP on the same latent features |
+| Streaming framework integration | **Ingestion:** `POST /ingest/event` and `/ingest/batch` (video servers, devices, edges, infra). **ABR + edge:** `POST /edges/register`, `POST /delivery/optimize` (predictive routing hints, transcoding/edge alignment). **Feedback loop:** `POST /feedback/interaction` (RL + recommender cache invalidation). |
 
 ## Quick start (Docker)
 
@@ -43,6 +44,12 @@ docker compose up --build
 
 - `POST /viewing/event` — JSON body: `user_id`, `content_id`, `watch_seconds`, optional `rating` (1–5).
 - `GET /recommendations/{user_id}?top_k=10&exclude_watched=true` — hybrid scores from **scikit-learn** TruncatedSVD + **PyTorch** MLP; needs the same ML stack as content analysis (Docker image already installs it).
+
+### Integration with streaming stacks
+
+- **Data aggregator:** `POST /ingest/event` with `source` = `video_server` | `user_device` | `edge` | `infra`, plus `event_type` and JSON `payload`. Use `event_type: network_probe` and payload keys `bandwidth_mbps`, `latency_ms`, `congestion` to mirror `POST /network/probe` into the same forecast/ABR history. High-volume agents can use `POST /ingest/batch` (up to 500 events).
+- **Edge + ABR:** Register packaging/CDN edges with `POST /edges/register` (`edge_id`, `region`, `base_url`, `capacity_units`). Send `source: infra`, `event_type: edge_load`, `origin_id: <edge_id>`, payload `current_load` / `healthy` to simulate LB/cache telemetry. `POST /delivery/optimize` returns ABR ladder, chosen edge, forecast risk, and hints for cache, LB, P2P, and routing (wire to NGINX/HAProxy/Varnish as needed).
+- **Feedback loop:** `POST /feedback/interaction` stores structured interactions; `playback_quality_feedback` updates the tabular RL agent (same fields as `POST /quality/feedback` inside `payload`); `explicit_dislike`, `not_interested`, `rate`, and `rating` invalidate the hybrid recommender cache so the next `GET /recommendations` refits.
 
 ## FFmpeg adaptive renditions
 

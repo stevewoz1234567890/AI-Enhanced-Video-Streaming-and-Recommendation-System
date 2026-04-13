@@ -18,17 +18,32 @@ from app.metrics_prom import (
     CONTENT_ANALYSIS_SECONDS,
     DECISION_LATENCY,
     FORECAST_REQUESTS,
+    INGESTION_EVENTS,
     LAST_BANDWIDTH_MBPS,
     LAST_LATENCY_MS,
     NETWORK_PROBE_INGEST,
     QUALITY_DECISIONS,
     RECOMMENDATION_FIT_SECONDS,
     RECOMMENDATION_REQUESTS,
+    USER_INTERACTIONS,
     metrics_response,
 )
-from app.models import Base, NetworkSample, UserPreference, ViewingEvent
+from app.models import (
+    Base,
+    EdgeNode,
+    IngestionEvent,
+    NetworkSample,
+    UserInteraction,
+    UserPreference,
+    ViewingEvent,
+)
 from app.schemas import (
+    DeliveryOptimizeRequest,
+    DeliveryOptimizeResponse,
+    EdgeRegisterIn,
     ForecastQuery,
+    IngestBatchIn,
+    IngestEventIn,
     NetworkProbeIn,
     PlaybackFeedback,
     PreferenceIn,
@@ -37,10 +52,25 @@ from app.schemas import (
     QualityResponse,
     RecommendedItem,
     RecommendationsResponse,
+    UserInteractionIn,
     ViewingEventIn,
 )
+from app.services.abr import build_quality_from_request
 from app.services.forecaster import forecast_network
 from app.services.quality_rl import agent
+
+_INTERACTION_METRIC_LABELS = frozenset(
+    {
+        "playback_quality_feedback",
+        "click",
+        "search",
+        "skip",
+        "rate",
+        "explicit_dislike",
+        "not_interested",
+        "manifest_switch",
+    }
+)
 
 
 @asynccontextmanager
@@ -116,48 +146,84 @@ async def ingest_probe(body: NetworkProbeIn, session: AsyncSession = Depends(get
     return {"stored": True}
 
 
+@app.post("/ingest/event")
+async def ingest_event(body: IngestEventIn, session: AsyncSession = Depends(get_session)):
+    from app.services.integration_hooks import apply_ingest_side_effects
+
+    session.add(
+        IngestionEvent(
+            source=body.source,
+            origin_id=body.origin_id,
+            event_type=body.event_type,
+            payload=body.payload,
+            client_ts=body.client_ts,
+        )
+    )
+    await apply_ingest_side_effects(session, body)
+    await session.commit()
+    INGESTION_EVENTS.labels(source=body.source).inc()
+    return {"stored": True}
+
+
+@app.post("/ingest/batch")
+async def ingest_batch(body: IngestBatchIn, session: AsyncSession = Depends(get_session)):
+    from app.services.integration_hooks import apply_ingest_side_effects
+
+    for ev in body.events:
+        session.add(
+            IngestionEvent(
+                source=ev.source,
+                origin_id=ev.origin_id,
+                event_type=ev.event_type,
+                payload=ev.payload,
+                client_ts=ev.client_ts,
+            )
+        )
+        await apply_ingest_side_effects(session, ev)
+        INGESTION_EVENTS.labels(source=ev.source).inc()
+    await session.commit()
+    return {"stored": len(body.events)}
+
+
+@app.post("/edges/register")
+async def register_edge(body: EdgeRegisterIn, session: AsyncSession = Depends(get_session)):
+    row = await session.get(EdgeNode, body.edge_id)
+    if row is None:
+        session.add(
+            EdgeNode(
+                edge_id=body.edge_id,
+                region=body.region,
+                base_url=body.base_url,
+                capacity_units=body.capacity_units,
+            )
+        )
+    else:
+        row.region = body.region
+        row.base_url = body.base_url
+        row.capacity_units = body.capacity_units
+        row.healthy = True
+    await session.commit()
+    return {"ok": True, "edge_id": body.edge_id}
+
+
+@app.post("/delivery/optimize", response_model=DeliveryOptimizeResponse)
+async def delivery_optimize(body: DeliveryOptimizeRequest, session: AsyncSession = Depends(get_session)):
+    from app.services.delivery_router import build_delivery_plan
+
+    t0 = time.perf_counter()
+    plan = await build_delivery_plan(session, body)
+    QUALITY_DECISIONS.labels(recommended_height=str(plan.quality.height)).inc()
+    DECISION_LATENCY.observe(time.perf_counter() - t0)
+    return plan
+
+
 @app.post("/quality/recommend", response_model=QualityResponse)
 async def recommend_quality(body: QualityRequest, session: AsyncSession = Depends(get_session)):
     t0 = time.perf_counter()
-    prefs = await session.get(UserPreference, body.user_id)
-    if prefs is None:
-        prefs = UserPreference(user_id=body.user_id)
-        session.add(prefs)
-        await session.commit()
-        await session.refresh(prefs)
-
-    risk = None
-    if body.use_forecast:
-        res = await session.execute(
-            select(NetworkSample.bandwidth_mbps, NetworkSample.latency_ms)
-            .order_by(NetworkSample.id.desc())
-            .limit(64)
-        )
-        rows = list(reversed(res.all()))
-        bw_hist = [float(r[0]) for r in rows]
-        lat_hist = [float(r[1]) for r in rows]
-        if bw_hist:
-            fc = forecast_network(bw_hist, lat_hist)
-            risk = fc.bottleneck_risk
-            FORECAST_REQUESTS.inc()
-
-    choice = agent.recommend(
-        user_id=body.user_id,
-        bandwidth_mbps=body.bandwidth_mbps,
-        latency_ms=body.latency_ms,
-        congestion=body.congestion,
-        user_max_height=prefs.preferred_max_height,
-        buffering_tolerance_sec=prefs.buffering_tolerance_sec,
-        forecast_bottleneck_risk=risk,
-    )
-    QUALITY_DECISIONS.labels(recommended_height=str(choice.height)).inc()
+    resp, _risk = await build_quality_from_request(session, body)
+    QUALITY_DECISIONS.labels(recommended_height=str(resp.height)).inc()
     DECISION_LATENCY.observe(time.perf_counter() - t0)
-    return QualityResponse(
-        rungs=choice.rungs,
-        height=choice.height,
-        target_bitrate_mbps=choice.target_bitrate_mbps,
-        policy=choice.policy,
-    )
+    return resp
 
 
 @app.post("/quality/feedback")
@@ -168,6 +234,40 @@ async def quality_feedback(body: PlaybackFeedback):
         played_height=body.played_height,
         ideal_height=body.ideal_height,
     )
+    return {"ok": True}
+
+
+@app.post("/feedback/interaction")
+async def feedback_interaction(body: UserInteractionIn, session: AsyncSession = Depends(get_session)):
+    from app.services.recommendations.hybrid_engine import invalidate_cache
+
+    session.add(
+        UserInteraction(
+            user_id=body.user_id,
+            interaction_type=body.interaction_type,
+            content_id=body.content_id,
+            payload=body.payload,
+        )
+    )
+    await session.commit()
+
+    metric_label = body.interaction_type if body.interaction_type in _INTERACTION_METRIC_LABELS else "custom"
+    USER_INTERACTIONS.labels(interaction_type=metric_label).inc()
+
+    if body.interaction_type == "playback_quality_feedback":
+        try:
+            agent.learn(
+                user_id=body.user_id,
+                stall_seconds=float(body.payload.get("stall_seconds", 0)),
+                played_height=int(body.payload["played_height"]),
+                ideal_height=int(body.payload["ideal_height"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    if body.interaction_type in ("explicit_dislike", "not_interested", "rate", "rating"):
+        invalidate_cache()
+
     return {"ok": True}
 
 

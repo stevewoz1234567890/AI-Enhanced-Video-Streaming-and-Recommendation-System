@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -63,3 +66,45 @@ class RecommendationsResponse(BaseModel):
     user_id: str
     items: list[RecommendedItem]
     model_notes: dict[str, str]
+
+
+class IngestEventIn(BaseModel):
+    source: Literal["video_server", "user_device", "edge", "infra"]
+    origin_id: str = Field(max_length=128)
+    event_type: str = Field(max_length=64)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    client_ts: datetime | None = None
+
+
+class IngestBatchIn(BaseModel):
+    events: list[IngestEventIn] = Field(max_length=500)
+
+
+class EdgeRegisterIn(BaseModel):
+    edge_id: str = Field(max_length=64)
+    region: str = Field(default="default", max_length=64)
+    base_url: str = Field(max_length=512)
+    capacity_units: float = Field(gt=0, default=1.0)
+
+
+class DeliveryOptimizeRequest(BaseModel):
+    user_id: str
+    bandwidth_mbps: float = Field(gt=0)
+    latency_ms: float = Field(ge=0)
+    congestion: float = Field(ge=0, le=1, default=0.0)
+    client_region: str | None = Field(default=None, max_length=64)
+    use_forecast: bool = True
+
+
+class DeliveryOptimizeResponse(BaseModel):
+    quality: QualityResponse
+    edge: dict[str, str | None]
+    forecast_bottleneck_risk: float | None
+    delivery_hints: dict[str, str]
+
+
+class UserInteractionIn(BaseModel):
+    user_id: str = Field(max_length=64)
+    interaction_type: str = Field(max_length=64)
+    content_id: str | None = Field(default=None, max_length=128)
+    payload: dict[str, Any] = Field(default_factory=dict)
