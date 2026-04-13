@@ -2,6 +2,60 @@
 
 This repository implements the **control plane** for the architecture described in the project brief: dynamic adaptive quality from live network and user context, observability, forecasting for capacity signals, and deployment patterns for caching, load balancing, multi-bitrate delivery, and edge/P2P extensions.
 
+## High-level architecture
+
+Reference diagram (AI-enhanced video streaming service):
+
+![High-level architecture diagram](docs/high-level-architecture.png)
+
+```mermaid
+flowchart LR
+  subgraph FL[Feedback loop]
+    UIC[User interactions]
+    IMP[Continuous improvement]
+    UIC --> IMP
+  end
+  subgraph DI[Data ingestion]
+    AGG[Data aggregator]
+    DEV[User devices]
+    VID[Video servers]
+    AGG --> DEV
+    AGG --> VID
+  end
+  IMP --> AGG
+  UP[User profiles]
+  DEV --> UP
+  VID --> UP
+  subgraph PR[Predictive network resource allocation]
+    RA[Real-time analytics]
+    HI[Historical analysis]
+    PM[Predictive modeling]
+    CA[Dynamic caching]
+    LB[Load balancing]
+    RO[Routing]
+    P2P[P2P optional]
+  end
+  subgraph DQ[Dynamic quality management]
+    TR[Transcoding]
+    NP[Network probes]
+    ABR[Adaptive bitrate]
+    ED[Edge servers]
+  end
+  UP --> PR
+  UP --> DQ
+  DEV --> ED
+```
+
+### Diagram blocks → this repository
+
+| Block | What to use in this repo |
+|--------|---------------------------|
+| **Feedback loop** | `POST /feedback/interaction`, `POST /quality/feedback`, `POST /models/metrics`, `POST /ethics/fairness-report`, `GET /analytics/export/training`, `GET /analytics/feedback/summary` |
+| **Data ingestion** | `POST /ingest/event`, `POST /ingest/batch` (aggregator); `POST /network/probe`; device/server telemetry in `ingestion_events` |
+| **User profiles** | `PUT/GET /users/{id}/preferences`, `user_privacy_settings` via `PUT /privacy/consent`, viewing history `POST /viewing/event`, recommendations `GET /recommendations/{user_id}` |
+| **Predictive network resource allocation** | `POST /network/forecast`, Prometheus + Grafana, `GET /metrics`; hints in `POST /delivery/optimize`; `configs/nginx.example.conf`, `configs/haproxy.example.cfg`; P2P/routing as operational extensions (see table below) |
+| **Dynamic quality management** | `POST /quality/recommend`, `POST /delivery/optimize`, `POST /edges/register`, `scripts/transcode_abr.sh` (transcoding ladder); probes feed the same pipeline as **Network probes** |
+
 ## Architecture mapping
 
 | Concept | Implementation |
