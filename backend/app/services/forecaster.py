@@ -43,6 +43,8 @@ def forecast_network(
     bw_drop = (float(np.mean(bw)) - pred_bw[-1]) / max(float(np.mean(bw)), 1e-6)
     lat_rise = (pred_lat[-1] - float(np.mean(lat))) / max(float(np.mean(lat)), 1e-6)
     bottleneck_risk = float(np.clip(0.5 * max(bw_drop, 0) + 0.5 * max(lat_rise, 0), 0.0, 1.0))
+    if bottleneck_risk < 1e-6:
+        bottleneck_risk = 0.0
 
     return ForecastResult(
         horizon_steps=horizon,

@@ -225,6 +225,16 @@ def recommend_for_user(
             out.append((cid, float(sc), "popularity"))
             if len(out) >= top_k:
                 break
+        if len(out) < top_k and exclude_watched:
+            seen = {c for c, _, _ in out}
+            for cid in state.popularity_rank:
+                if cid in seen:
+                    continue
+                sc = state.popularity_scores.get(cid, 0.0)
+                out.append((cid, float(sc) * 0.85, "popularity_including_watched"))
+                seen.add(cid)
+                if len(out) >= top_k:
+                    break
         return out[:top_k]
 
     uix = state.user_index[user_id]
@@ -251,6 +261,16 @@ def recommend_for_user(
                 continue
             sc = state.popularity_scores.get(cid, 0.0)
             out.append((cid, float(sc), "popularity"))
+            seen.add(cid)
+            if len(out) >= top_k:
+                break
+    if len(out) < top_k and exclude_watched:
+        seen = {c for c, _, _ in out}
+        for cid in state.popularity_rank:
+            if cid in seen:
+                continue
+            sc = state.popularity_scores.get(cid, 0.0)
+            out.append((cid, float(sc) * 0.85, "popularity_including_watched"))
             seen.add(cid)
             if len(out) >= top_k:
                 break
