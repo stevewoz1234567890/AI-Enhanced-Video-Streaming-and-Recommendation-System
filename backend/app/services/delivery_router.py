@@ -42,6 +42,7 @@ async def build_delivery_plan(session: AsyncSession, body: DeliveryOptimizeReque
         body.latency_ms,
         body.congestion,
         body.use_forecast,
+        body.fast_path,
     )
     edge = await _choose_edge(session, body.client_region, risk)
 

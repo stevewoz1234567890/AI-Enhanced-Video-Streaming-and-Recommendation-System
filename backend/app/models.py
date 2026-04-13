@@ -59,6 +59,20 @@ class EdgeNode(Base):
     healthy: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class TrainingQualityMetric(Base):
+    """Offline / batch job reports (Spark, SageMaker, etc.) for monitoring model accuracy over time."""
+
+    __tablename__ = "training_quality_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_name: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[str] = mapped_column(String(32), index=True)
+    metric_name: Mapped[str] = mapped_column(String(64))
+    metric_value: Mapped[float] = mapped_column(Float)
+    extra: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class UserInteraction(Base):
     """Feedback loop: arbitrary interactions to refine recommendations and delivery models."""
 

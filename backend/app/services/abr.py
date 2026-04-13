@@ -17,6 +17,7 @@ async def build_quality_response(
     latency_ms: float,
     congestion: float,
     use_forecast: bool,
+    fast_path: bool = False,
 ) -> tuple[QualityResponse, float | None]:
     prefs = await session.get(UserPreference, user_id)
     if prefs is None:
@@ -26,7 +27,8 @@ async def build_quality_response(
         await session.refresh(prefs)
 
     risk: float | None = None
-    if use_forecast:
+    use_fc = use_forecast and not fast_path
+    if use_fc:
         res = await session.execute(
             select(NetworkSample.bandwidth_mbps, NetworkSample.latency_ms)
             .order_by(NetworkSample.id.desc())
@@ -48,6 +50,7 @@ async def build_quality_response(
         user_max_height=prefs.preferred_max_height,
         buffering_tolerance_sec=prefs.buffering_tolerance_sec,
         forecast_bottleneck_risk=risk,
+        heuristic_only=fast_path,
     )
     return (
         QualityResponse(
@@ -68,4 +71,5 @@ async def build_quality_from_request(session: AsyncSession, body: QualityRequest
         body.latency_ms,
         body.congestion,
         body.use_forecast,
+        body.fast_path,
     )

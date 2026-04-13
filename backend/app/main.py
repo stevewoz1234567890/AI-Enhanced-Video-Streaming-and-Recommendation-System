@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import os
 import shutil
@@ -8,12 +9,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import engine, get_session
 from app.content_schemas import ContentAnalysisResponse
 from app.metrics_prom import (
+    ABR_FAST_PATH_DECISIONS,
     CONTENT_ANALYSIS_REQUESTS,
     CONTENT_ANALYSIS_SECONDS,
     DECISION_LATENCY,
@@ -21,10 +24,12 @@ from app.metrics_prom import (
     INGESTION_EVENTS,
     LAST_BANDWIDTH_MBPS,
     LAST_LATENCY_MS,
+    MODEL_METRIC_INGEST,
     NETWORK_PROBE_INGEST,
     QUALITY_DECISIONS,
     RECOMMENDATION_FIT_SECONDS,
     RECOMMENDATION_REQUESTS,
+    TRAINING_EXPORT_REQUESTS,
     USER_INTERACTIONS,
     metrics_response,
 )
@@ -33,6 +38,7 @@ from app.models import (
     EdgeNode,
     IngestionEvent,
     NetworkSample,
+    TrainingQualityMetric,
     UserInteraction,
     UserPreference,
     ViewingEvent,
@@ -41,9 +47,13 @@ from app.schemas import (
     DeliveryOptimizeRequest,
     DeliveryOptimizeResponse,
     EdgeRegisterIn,
+    FeedbackSummaryItem,
+    FeedbackSummaryResponse,
     ForecastQuery,
     IngestBatchIn,
     IngestEventIn,
+    ModelMetricIn,
+    ModelMetricOut,
     NetworkProbeIn,
     PlaybackFeedback,
     PreferenceIn,
@@ -214,6 +224,8 @@ async def delivery_optimize(body: DeliveryOptimizeRequest, session: AsyncSession
     plan = await build_delivery_plan(session, body)
     QUALITY_DECISIONS.labels(recommended_height=str(plan.quality.height)).inc()
     DECISION_LATENCY.observe(time.perf_counter() - t0)
+    if body.fast_path:
+        ABR_FAST_PATH_DECISIONS.inc()
     return plan
 
 
@@ -223,6 +235,8 @@ async def recommend_quality(body: QualityRequest, session: AsyncSession = Depend
     resp, _risk = await build_quality_from_request(session, body)
     QUALITY_DECISIONS.labels(recommended_height=str(resp.height)).inc()
     DECISION_LATENCY.observe(time.perf_counter() - t0)
+    if body.fast_path:
+        ABR_FAST_PATH_DECISIONS.inc()
     return resp
 
 
@@ -269,6 +283,105 @@ async def feedback_interaction(body: UserInteractionIn, session: AsyncSession = 
         invalidate_cache()
 
     return {"ok": True}
+
+
+@app.get("/analytics/export/training")
+async def export_training_snapshot(
+    session: AsyncSession = Depends(get_session),
+    streams: str = Query(default="network,viewing,ingestion,interactions"),
+    limit_per_stream: int = Query(default=5000, ge=1, le=100_000),
+):
+    from app.services.training_export import collect_training_records
+
+    TRAINING_EXPORT_REQUESTS.inc()
+    stream_list = [s.strip() for s in streams.split(",") if s.strip()]
+    rows = await collect_training_records(session, stream_list, limit_per_stream)
+
+    def ndjson_iter():
+        for row in rows:
+            yield json.dumps(row, default=str) + "\n"
+
+    return StreamingResponse(ndjson_iter(), media_type="application/x-ndjson")
+
+
+@app.get("/analytics/feedback/summary", response_model=FeedbackSummaryResponse)
+async def feedback_summary(session: AsyncSession = Depends(get_session)):
+    viewing_total = int(
+        (await session.execute(select(func.count()).select_from(ViewingEvent))).scalar_one() or 0
+    )
+    user_interactions_total = int(
+        (await session.execute(select(func.count()).select_from(UserInteraction))).scalar_one() or 0
+    )
+    network_samples_total = int(
+        (await session.execute(select(func.count()).select_from(NetworkSample))).scalar_one() or 0
+    )
+    ingestion_events_total = int(
+        (await session.execute(select(func.count()).select_from(IngestionEvent))).scalar_one() or 0
+    )
+    cnt = func.count().label("cnt")
+    res = await session.execute(
+        select(UserInteraction.interaction_type, cnt)
+        .group_by(UserInteraction.interaction_type)
+        .order_by(cnt.desc())
+    )
+    by_type = [FeedbackSummaryItem(interaction_type=r[0], count=int(r[1])) for r in res.all()]
+    return FeedbackSummaryResponse(
+        interactions_by_type=by_type,
+        viewing_events_total=viewing_total,
+        user_interactions_total=user_interactions_total,
+        network_samples_total=network_samples_total,
+        ingestion_events_total=ingestion_events_total,
+    )
+
+
+@app.post("/models/metrics", response_model=ModelMetricOut)
+async def ingest_model_metric(body: ModelMetricIn, session: AsyncSession = Depends(get_session)):
+    row = TrainingQualityMetric(
+        model_name=body.model_name,
+        version=body.version,
+        metric_name=body.metric_name,
+        metric_value=body.metric_value,
+        extra=body.extra,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    MODEL_METRIC_INGEST.labels(model_name=body.model_name).inc()
+    return ModelMetricOut(
+        id=row.id,
+        model_name=row.model_name,
+        version=row.version,
+        metric_name=row.metric_name,
+        metric_value=row.metric_value,
+        extra=row.extra,
+        created_at=row.created_at,
+    )
+
+
+@app.get("/models/metrics", response_model=list[ModelMetricOut])
+async def list_model_metrics(
+    session: AsyncSession = Depends(get_session),
+    model_name: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    stmt = select(TrainingQualityMetric)
+    if model_name:
+        stmt = stmt.where(TrainingQualityMetric.model_name == model_name)
+    stmt = stmt.order_by(TrainingQualityMetric.id.desc()).limit(limit)
+    res = await session.execute(stmt)
+    rows = res.scalars().all()
+    return [
+        ModelMetricOut(
+            id=r.id,
+            model_name=r.model_name,
+            version=r.version,
+            metric_name=r.metric_name,
+            metric_value=r.metric_value,
+            extra=r.extra,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 async def _load_interaction_rows(session: AsyncSession) -> list[tuple[str, str, float, float | None]]:

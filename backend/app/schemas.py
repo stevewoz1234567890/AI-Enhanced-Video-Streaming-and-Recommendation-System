@@ -28,6 +28,10 @@ class QualityRequest(BaseModel):
     latency_ms: float = Field(ge=0)
     congestion: float = Field(ge=0, le=1, default=0.0)
     use_forecast: bool = True
+    fast_path: bool = Field(
+        default=False,
+        description="Skip forecast DB read and RL exploration for lower latency (edge / real-time paths).",
+    )
 
 
 class QualityResponse(BaseModel):
@@ -94,6 +98,10 @@ class DeliveryOptimizeRequest(BaseModel):
     congestion: float = Field(ge=0, le=1, default=0.0)
     client_region: str | None = Field(default=None, max_length=64)
     use_forecast: bool = True
+    fast_path: bool = Field(
+        default=False,
+        description="Low-latency ABR: no predictive horizon, heuristic ladder only.",
+    )
 
 
 class DeliveryOptimizeResponse(BaseModel):
@@ -108,3 +116,34 @@ class UserInteractionIn(BaseModel):
     interaction_type: str = Field(max_length=64)
     content_id: str | None = Field(default=None, max_length=128)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelMetricIn(BaseModel):
+    model_name: str = Field(max_length=64)
+    version: str = Field(max_length=32)
+    metric_name: str = Field(max_length=64)
+    metric_value: float
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelMetricOut(BaseModel):
+    id: int
+    model_name: str
+    version: str
+    metric_name: str
+    metric_value: float
+    extra: dict[str, Any]
+    created_at: datetime
+
+
+class FeedbackSummaryItem(BaseModel):
+    interaction_type: str
+    count: int
+
+
+class FeedbackSummaryResponse(BaseModel):
+    interactions_by_type: list[FeedbackSummaryItem]
+    viewing_events_total: int
+    user_interactions_total: int
+    network_samples_total: int
+    ingestion_events_total: int

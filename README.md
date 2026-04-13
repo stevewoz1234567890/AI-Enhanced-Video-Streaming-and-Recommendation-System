@@ -60,6 +60,15 @@ chmod +x scripts/transcode_abr.sh
 
 Map manifest rung heights to the ladder in `quality_rl.LADDER` so server and client stay aligned.
 
+## Technical challenges (and how this repo addresses them)
+
+| Challenge | Approach |
+|-----------|----------|
+| **Scalability** (volume of telemetry + training data) | `GET /analytics/export/training` returns **NDJSON** per stream for **Apache Spark**, AWS **Glue/EMR**, or S3 landing zones; compose supports **`--scale backend=N`**; offload heavy training to the batch job, not the request path. |
+| **Latency** (real-time ABR) | **`fast_path: true`** on `POST /quality/recommend` and `POST /delivery/optimize` skips forecast DB work and uses **heuristic-only** ladder selection (`policy: heuristic_fast`); pair with **edge** delivery from `/edges/register` + `/delivery/optimize`. |
+| **Integration** (existing CDN / origin) | **REST/OpenAPI** microservice style: ingest, ABR, recommendations, and delivery hints are separate routes; **`configs/nginx-microservices.example.conf`** shows LB across replicas. |
+| **Model accuracy** | **`POST /models/metrics`** ingests offline validation scores (e.g. from Spark/SageMaker); **`GET /analytics/feedback/summary`** aggregates user interactions; **`POST /feedback/interaction`** + viewing events feed export for **continuous retraining**. |
+
 ## Production notes
 
 - Persist RL policy (Redis/DB) if you run multiple API replicas.

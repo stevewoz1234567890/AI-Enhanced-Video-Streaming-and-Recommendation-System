@@ -70,6 +70,7 @@ class QualityAgent:
         user_max_height: int,
         buffering_tolerance_sec: float,
         forecast_bottleneck_risk: float | None = None,
+        heuristic_only: bool = False,
     ) -> QualityChoice:
         effective_bw = max(bandwidth_mbps * (1.0 - min(congestion, 0.95)) * 0.92, 0.5)
         if forecast_bottleneck_risk is not None:
@@ -87,6 +88,16 @@ class QualityAgent:
                 best_i = i
                 break
         heuristic_idx = best_i
+
+        if heuristic_only:
+            rung = LADDER[heuristic_idx]
+            self._last[user_id] = (key, heuristic_idx)
+            return QualityChoice(
+                rungs=str(rung["rungs"]),
+                height=int(rung["height"]),
+                target_bitrate_mbps=float(rung["bitrate_mbps"]),
+                policy="heuristic_fast",
+            )
 
         if random.random() < self.epsilon:
             valid = [i for i, r in enumerate(LADDER) if r["height"] <= user_max_height]

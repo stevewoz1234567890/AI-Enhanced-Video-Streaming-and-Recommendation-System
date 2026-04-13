@@ -44,6 +44,16 @@ USER_INTERACTIONS = Counter(
     "User interaction feedback events",
     ["interaction_type"],
 )
+ABR_FAST_PATH_DECISIONS = Counter(
+    "streaming_abr_fast_path_decisions_total",
+    "ABR decisions using fast_path (no forecast / heuristic-only)",
+)
+TRAINING_EXPORT_REQUESTS = Counter("streaming_training_export_requests_total", "Training NDJSON export calls")
+MODEL_METRIC_INGEST = Counter(
+    "streaming_model_metric_reports_total",
+    "Offline model accuracy / validation metrics ingested",
+    ["model_name"],
+)
 
 
 def metrics_response():
