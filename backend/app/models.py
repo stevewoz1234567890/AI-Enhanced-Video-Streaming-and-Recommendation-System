@@ -19,6 +19,19 @@ class UserPreference(Base):
     )
 
 
+class ViewingEvent(Base):
+    """Implicit/explicit feedback for collaborative filtering and hybrid recommenders."""
+
+    __tablename__ = "viewing_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    content_id: Mapped[str] = mapped_column(String(128), index=True)
+    watch_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class NetworkSample(Base):
     """Historical probes: bandwidth (Mbps), latency (ms), congestion score0–1."""
 

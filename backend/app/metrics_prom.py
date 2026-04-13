@@ -24,6 +24,16 @@ CONTENT_ANALYSIS_SECONDS = Histogram(
     "End-to-end content analysis duration",
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
 )
+RECOMMENDATION_REQUESTS = Counter(
+    "streaming_recommendation_requests_total",
+    "Hybrid recommendation API calls",
+    ["fallback"],
+)
+RECOMMENDATION_FIT_SECONDS = Histogram(
+    "streaming_recommendation_fit_seconds",
+    "Time to refit MF + neural scorer",
+    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+)
 
 
 def metrics_response():

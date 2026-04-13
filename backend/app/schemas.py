@@ -44,3 +44,22 @@ class PlaybackFeedback(BaseModel):
 
 class ForecastQuery(BaseModel):
     horizon: int = Field(default=6, ge=1, le=48)
+
+
+class ViewingEventIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    content_id: str = Field(min_length=1, max_length=128)
+    watch_seconds: float = Field(ge=0, default=0.0)
+    rating: float | None = Field(default=None, ge=1.0, le=5.0)
+
+
+class RecommendedItem(BaseModel):
+    content_id: str
+    score: float
+    source: str  # hybrid_mlp | popularity | matrix_factorization
+
+
+class RecommendationsResponse(BaseModel):
+    user_id: str
+    items: list[RecommendedItem]
+    model_notes: dict[str, str]

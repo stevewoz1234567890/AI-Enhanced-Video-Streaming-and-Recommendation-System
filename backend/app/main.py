@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 import shutil
 import tempfile
@@ -6,8 +7,8 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
-from sqlalchemy import select
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import engine, get_session
@@ -21,9 +22,11 @@ from app.metrics_prom import (
     LAST_LATENCY_MS,
     NETWORK_PROBE_INGEST,
     QUALITY_DECISIONS,
+    RECOMMENDATION_FIT_SECONDS,
+    RECOMMENDATION_REQUESTS,
     metrics_response,
 )
-from app.models import Base, NetworkSample, UserPreference
+from app.models import Base, NetworkSample, UserPreference, ViewingEvent
 from app.schemas import (
     ForecastQuery,
     NetworkProbeIn,
@@ -32,6 +35,9 @@ from app.schemas import (
     PreferenceOut,
     QualityRequest,
     QualityResponse,
+    RecommendedItem,
+    RecommendationsResponse,
+    ViewingEventIn,
 )
 from app.services.forecaster import forecast_network
 from app.services.quality_rl import agent
@@ -163,6 +169,79 @@ async def quality_feedback(body: PlaybackFeedback):
         ideal_height=body.ideal_height,
     )
     return {"ok": True}
+
+
+async def _load_interaction_rows(session: AsyncSession) -> list[tuple[str, str, float, float | None]]:
+    res = await session.execute(
+        select(
+            ViewingEvent.user_id,
+            ViewingEvent.content_id,
+            func.coalesce(func.sum(ViewingEvent.watch_seconds), 0.0),
+            func.avg(ViewingEvent.rating),
+        ).group_by(ViewingEvent.user_id, ViewingEvent.content_id)
+    )
+    out: list[tuple[str, str, float, float | None]] = []
+    for uid, cid, wsum, ravg in res.all():
+        rating = float(ravg) if ravg is not None else None
+        if rating is not None and math.isnan(rating):
+            rating = None
+        out.append((uid, cid, float(wsum), rating))
+    return sorted(out, key=lambda x: (x[0], x[1]))
+
+
+@app.post("/viewing/event")
+async def record_viewing_event(body: ViewingEventIn, session: AsyncSession = Depends(get_session)):
+    from app.services.recommendations.hybrid_engine import invalidate_cache
+
+    session.add(
+        ViewingEvent(
+            user_id=body.user_id,
+            content_id=body.content_id,
+            watch_seconds=body.watch_seconds,
+            rating=body.rating,
+        )
+    )
+    await session.commit()
+    invalidate_cache()
+    return {"stored": True}
+
+
+@app.get("/recommendations/{user_id}", response_model=RecommendationsResponse)
+async def get_recommendations(
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+    top_k: int = Query(default=10, ge=1, le=100),
+    exclude_watched: bool = Query(default=True),
+):
+    from app.services.recommendations import hybrid_engine
+
+    if not hybrid_engine.deps_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Recommendations unavailable: install scikit-learn, scipy, and PyTorch (see requirements-analysis.txt).",
+        )
+
+    rows = await _load_interaction_rows(session)
+    state, cache_hit, fit_sec = await asyncio.to_thread(hybrid_engine.fit_or_get_cached, rows)
+    if not cache_hit and fit_sec > 0:
+        RECOMMENDATION_FIT_SECONDS.observe(fit_sec)
+
+    exclude: set[str] = set()
+    if exclude_watched:
+        res = await session.execute(select(ViewingEvent.content_id).where(ViewingEvent.user_id == user_id))
+        exclude = {r[0] for r in res.all()}
+
+    raw = hybrid_engine.recommend_for_user(state, user_id, top_k, exclude_watched=exclude)
+    fallback = "popularity" if user_id not in state.user_index or state.mlp is None else "hybrid"
+    RECOMMENDATION_REQUESTS.labels(fallback=fallback).inc()
+
+    items = [RecommendedItem(content_id=c, score=round(s, 4), source=src) for c, s, src in raw]
+    notes = {
+        "collaborative_filtering": "TruncatedSVD matrix factorization (scikit-learn)",
+        "deep_learning": "PyTorch MLP on concatenated user/item latent factors",
+        "tensorflow": "tf.keras.layers.Dense stack on same latent inputs is a drop-in swap",
+    }
+    return RecommendationsResponse(user_id=user_id, items=items, model_notes=notes)
 
 
 def _unlink_safe(path: str) -> None:

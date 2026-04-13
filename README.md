@@ -16,6 +16,7 @@ This repository implements the **control plane** for the architecture described 
 | P2P / latency | **WebRTC** / **libp2p** are not bundled here; run edge caches (e.g. Greengrass) in front of origin and optionally add a P2P assist layer per your CDN strategy |
 | SD-WAN | Operational routing layer; metrics still land in probes/Prometheus |
 | Video content analysis | `POST /content/analyze` — **CNN** (ResNet-18 / ImageNet) on sampled frames, **GRU** over frame embeddings for transition / scene-change cues, **NLP** (TF–IDF + theme seeds; transformer-ready) on optional transcript |
+| Viewing habits & recommendations | `POST /viewing/event` logs watch time / ratings; `GET /recommendations/{user_id}` blends **matrix factorization** (TruncatedSVD / collaborative filtering) with a **PyTorch MLP**; cold-start uses popularity. TensorFlow can replace the MLP on the same latent features |
 
 ## Quick start (Docker)
 
@@ -37,6 +38,11 @@ docker compose up --build
 ### Video content analysis
 
 `POST /content/analyze` (multipart): field `video` = file, optional `transcript` = form text. Requires **ffmpeg** in the container (enabled in `backend/Dockerfile`) and **PyTorch / torchvision / scikit-learn** (`requirements-analysis.txt`). TensorFlow can mirror the same split: `tf.keras.applications` for CNN, `tf.keras.layers.RNN` for sequence modeling, and your NLP stack for dialogue.
+
+### Viewing habits & recommendations
+
+- `POST /viewing/event` — JSON body: `user_id`, `content_id`, `watch_seconds`, optional `rating` (1–5).
+- `GET /recommendations/{user_id}?top_k=10&exclude_watched=true` — hybrid scores from **scikit-learn** TruncatedSVD + **PyTorch** MLP; needs the same ML stack as content analysis (Docker image already installs it).
 
 ## FFmpeg adaptive renditions
 
