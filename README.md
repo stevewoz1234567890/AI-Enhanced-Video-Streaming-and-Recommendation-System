@@ -18,7 +18,7 @@ A **control-plane API** for AI-assisted streaming: adaptive bitrate (ABR) decisi
 - [Ethics & responsible use](#ethics--responsible-use)
 - [Operational scale & latency](#operational-scale--latency)
 - [Production notes](#production-notes)
-- [License & reference docs](#license--reference-docs)
+- [License](#license)
 
 ---
 
@@ -207,9 +207,6 @@ Details: `GET /privacy/transparency`.
 
 ---
 
-## License & reference docs
+## License
 
-Original project write-up (if present in repo root):
-
-- `AI-Enhanced Video Streaming Service.pdf`
-- `AI-Enhanced Video Streaming Service.docx`
+Add a `LICENSE` file for your distribution terms if you publish this repository.
