@@ -1,0 +1,6 @@
+# PyTorch CPU wheels; keep in sync with Dockerfile install order.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+torchvision==0.20.1
+scikit-learn==1.5.2
+pillow==11.0.0

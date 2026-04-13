@@ -1,13 +1,20 @@
+import asyncio
+import os
+import shutil
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import engine, get_session
+from app.content_schemas import ContentAnalysisResponse
 from app.metrics_prom import (
+    CONTENT_ANALYSIS_REQUESTS,
+    CONTENT_ANALYSIS_SECONDS,
     DECISION_LATENCY,
     FORECAST_REQUESTS,
     LAST_BANDWIDTH_MBPS,
@@ -156,6 +163,50 @@ async def quality_feedback(body: PlaybackFeedback):
         ideal_height=body.ideal_height,
     )
     return {"ok": True}
+
+
+def _unlink_safe(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+@app.post("/content/analyze", response_model=ContentAnalysisResponse)
+async def content_analyze(
+    background_tasks: BackgroundTasks,
+    video: UploadFile = File(...),
+    transcript: str | None = Form(default=None),
+):
+    from app.services.content_analysis.pipeline import analysis_available, analyze_media
+
+    if not analysis_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Content analysis unavailable: install PyTorch, torchvision, scikit-learn, Pillow, and ffmpeg.",
+        )
+
+    suffix = Path(video.filename or "upload.mp4").suffix or ".mp4"
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    background_tasks.add_task(_unlink_safe, path)
+    try:
+        with open(path, "wb") as out:
+            shutil.copyfileobj(video.file, out)
+    except Exception:
+        _unlink_safe(path)
+        raise
+
+    t0 = time.perf_counter()
+    try:
+        result = await asyncio.to_thread(analyze_media, path, transcript)
+        CONTENT_ANALYSIS_REQUESTS.labels(status="ok").inc()
+        return result
+    except Exception as exc:
+        CONTENT_ANALYSIS_REQUESTS.labels(status="error").inc()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        CONTENT_ANALYSIS_SECONDS.observe(time.perf_counter() - t0)
 
 
 @app.post("/network/forecast")

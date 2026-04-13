@@ -15,6 +15,7 @@ This repository implements the **control plane** for the architecture described 
 | Caching / LB | Example **NGINX** and **HAProxy** configs in `configs/` |
 | P2P / latency | **WebRTC** / **libp2p** are not bundled here; run edge caches (e.g. Greengrass) in front of origin and optionally add a P2P assist layer per your CDN strategy |
 | SD-WAN | Operational routing layer; metrics still land in probes/Prometheus |
+| Video content analysis | `POST /content/analyze` — **CNN** (ResNet-18 / ImageNet) on sampled frames, **GRU** over frame embeddings for transition / scene-change cues, **NLP** (TF–IDF + theme seeds; transformer-ready) on optional transcript |
 
 ## Quick start (Docker)
 
@@ -32,6 +33,10 @@ docker compose up --build
 2. Emit probes (from your network agents): `POST /network/probe` with `bandwidth_mbps`, `latency_ms`, `congestion`.
 3. Ask for a rung: `POST /quality/recommend` with `user_id`, current network stats; optional `use_forecast` uses stored history.
 4. After playback, send `POST /quality/feedback` with stalls and played resolution to update the RL table.
+
+### Video content analysis
+
+`POST /content/analyze` (multipart): field `video` = file, optional `transcript` = form text. Requires **ffmpeg** in the container (enabled in `backend/Dockerfile`) and **PyTorch / torchvision / scikit-learn** (`requirements-analysis.txt`). TensorFlow can mirror the same split: `tf.keras.applications` for CNN, `tf.keras.layers.RNN` for sequence modeling, and your NLP stack for dialogue.
 
 ## FFmpeg adaptive renditions
 

@@ -14,6 +14,16 @@ DECISION_LATENCY = Histogram(
     "Time to compute quality recommendation",
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
 )
+CONTENT_ANALYSIS_REQUESTS = Counter(
+    "streaming_content_analysis_requests_total",
+    "Video content analysis API calls",
+    ["status"],
+)
+CONTENT_ANALYSIS_SECONDS = Histogram(
+    "streaming_content_analysis_seconds",
+    "End-to-end content analysis duration",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
+)
 
 
 def metrics_response():
