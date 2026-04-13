@@ -1,10 +1,28 @@
 # AI-Enhanced Video Streaming and Recommendation System
 
-This repository implements the **control plane** for the architecture described in the project brief: dynamic adaptive quality from live network and user context, observability, forecasting for capacity signals, and deployment patterns for caching, load balancing, multi-bitrate delivery, and edge/P2P extensions.
+A **control-plane API** for AI-assisted streaming: adaptive bitrate (ABR) decisions, network forecasting, edge-aware delivery, recommendations, content analysis, unified telemetry ingest, privacy controls, and batch export for offline training.
+
+**Stack:** FastAPI · PostgreSQL · Prometheus · Grafana · PyTorch / scikit-learn (optional ML paths in Docker image)
+
+---
+
+## Contents
+
+- [High-level architecture](#high-level-architecture)
+- [Repository layout](#repository-layout)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [API overview](#api-overview)
+- [Feature reference](#feature-reference)
+- [Workflows](#workflows)
+- [Ethics & responsible use](#ethics--responsible-use)
+- [Operational scale & latency](#operational-scale--latency)
+- [Production notes](#production-notes)
+- [License & reference docs](#license--reference-docs)
+
+---
 
 ## High-level architecture
-
-Reference diagram (AI-enhanced video streaming service):
 
 ![High-level architecture diagram](docs/high-level-architecture.png)
 
@@ -46,97 +64,152 @@ flowchart LR
   DEV --> ED
 ```
 
-### Diagram blocks → this repository
+### Diagram → repository
 
-| Block | What to use in this repo |
-|--------|---------------------------|
-| **Feedback loop** | `POST /feedback/interaction`, `POST /quality/feedback`, `POST /models/metrics`, `POST /ethics/fairness-report`, `GET /analytics/export/training`, `GET /analytics/feedback/summary` |
-| **Data ingestion** | `POST /ingest/event`, `POST /ingest/batch` (aggregator); `POST /network/probe`; device/server telemetry in `ingestion_events` |
-| **User profiles** | `PUT/GET /users/{id}/preferences`, `user_privacy_settings` via `PUT /privacy/consent`, viewing history `POST /viewing/event`, recommendations `GET /recommendations/{user_id}` |
-| **Predictive network resource allocation** | `POST /network/forecast`, Prometheus + Grafana, `GET /metrics`; hints in `POST /delivery/optimize`; `configs/nginx.example.conf`, `configs/haproxy.example.cfg`; P2P/routing as operational extensions (see table below) |
-| **Dynamic quality management** | `POST /quality/recommend`, `POST /delivery/optimize`, `POST /edges/register`, `scripts/transcode_abr.sh` (transcoding ladder); probes feed the same pipeline as **Network probes** |
+| Block | Primary APIs & assets |
+|--------|------------------------|
+| **Feedback loop** | `/feedback/interaction`, `/quality/feedback`, `/models/metrics`, `/ethics/fairness-report`, `/analytics/export/training`, `/analytics/feedback/summary` |
+| **Data ingestion** | `/ingest/event`, `/ingest/batch`, `/network/probe`, `ingestion_events` |
+| **User profiles** | `/users/{id}/preferences`, `/privacy/consent`, `/viewing/event`, `/recommendations/{user_id}` |
+| **Predictive allocation** | `/network/forecast`, `/metrics`, `/delivery/optimize`, `configs/nginx*.conf`, `configs/haproxy.example.cfg` |
+| **Dynamic quality** | `/quality/recommend`, `/delivery/optimize`, `/edges/register`, `scripts/transcode_abr.sh` |
 
-## Architecture mapping
+---
 
-| Concept | Implementation |
-|--------|----------------|
-| Real-time network monitoring | `POST /network/probe` stores bandwidth, latency, congestion; **Prometheus** scrapes `GET /metrics`; **Grafana** dashboards via Docker |
-| SNMP | Point **snmp_exporter** + Prometheus at your gear; forward summaries into `/network/probe` with `source=snmp` (same schema) |
-| Viewer preferences | **PostgreSQL** via `PUT/GET /users/{id}/preferences` (preferred max resolution, buffering tolerance) |
-| AI decision-making | **Tabular Q-learning** agent in `backend/app/services/quality_rl.py` (swap for TensorFlow/PyTorch/SageMaker models behind the same API) |
-| Quality adjustment | `POST /quality/recommend` returns ladder rung; **FFmpeg** script produces HLS renditions; players use **DASH/HLS** ABR |
-| Bottleneck prediction | `POST /network/forecast` — linear trend baseline; replace with **LSTM/ARIMA** + Spark/feature store as needed |
-| Caching / LB | Example **NGINX** and **HAProxy** configs in `configs/` |
-| P2P / latency | **WebRTC** / **libp2p** are not bundled here; run edge caches (e.g. Greengrass) in front of origin and optionally add a P2P assist layer per your CDN strategy |
-| SD-WAN | Operational routing layer; metrics still land in probes/Prometheus |
-| Video content analysis | `POST /content/analyze` — **CNN** (ResNet-18 / ImageNet) on sampled frames, **GRU** over frame embeddings for transition / scene-change cues, **NLP** (TF–IDF + theme seeds; transformer-ready) on optional transcript |
-| Viewing habits & recommendations | `POST /viewing/event` logs watch time / ratings; `GET /recommendations/{user_id}` blends **matrix factorization** (TruncatedSVD / collaborative filtering) with a **PyTorch MLP**; cold-start uses popularity. TensorFlow can replace the MLP on the same latent features |
-| Streaming framework integration | **Ingestion:** `POST /ingest/event` and `/ingest/batch` (video servers, devices, edges, infra). **ABR + edge:** `POST /edges/register`, `POST /delivery/optimize` (predictive routing hints, transcoding/edge alignment). **Feedback loop:** `POST /feedback/interaction` (RL + recommender cache invalidation). |
+## Repository layout
 
-## Quick start (Docker)
+| Path | Role |
+|------|------|
+| `backend/` | FastAPI app (`app/main.py`), SQLAlchemy models, ABR / ML / privacy services; `Dockerfile`; `requirements.txt` + `requirements-analysis.txt` |
+| `configs/` | NGINX cache, HAProxy LB, microservices LB example |
+| `docs/` | High-level architecture PNG |
+| `observability/` | Prometheus scrape config, Grafana provisioning |
+| `scripts/` | Multi-rung HLS transcoding; Spark NDJSON reader example |
+| `docker-compose.yml` | Postgres, backend, Prometheus, Grafana |
+
+---
+
+## Quick start
 
 ```bash
 docker compose up --build
 ```
 
-- API: http://localhost:8000/docs  
-- Prometheus: http://localhost:9090  
-- Grafana: http://localhost:3000 (admin / admin)  
+| Service | URL |
+|---------|-----|
+| OpenAPI / Swagger | http://localhost:8000/docs |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 (default `admin` / `admin`) |
 
-### Example flow
+Scale API replicas: `docker compose up --scale backend=3` (place an LB in front; see `configs/nginx-microservices.example.conf`).
 
-1. Seed preferences: `PUT /users/demo/preferences` with `preferred_max_height` and `buffering_tolerance_sec`.
-2. Emit probes (from your network agents): `POST /network/probe` with `bandwidth_mbps`, `latency_ms`, `congestion`.
-3. Ask for a rung: `POST /quality/recommend` with `user_id`, current network stats; optional `use_forecast` uses stored history.
-4. After playback, send `POST /quality/feedback` with stalls and played resolution to update the RL table.
+---
 
-### Video content analysis
+## Configuration
 
-`POST /content/analyze` (multipart): field `video` = file, optional `transcript` = form text. Requires **ffmpeg** in the container (enabled in `backend/Dockerfile`) and **PyTorch / torchvision / scikit-learn** (`requirements-analysis.txt`). TensorFlow can mirror the same split: `tf.keras.applications` for CNN, `tf.keras.layers.RNN` for sequence modeling, and your NLP stack for dialogue.
+Set via environment (e.g. in `docker-compose.yml` or `.env`):
 
-### Viewing habits & recommendations
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | Async SQLAlchemy URL (default: Postgres in compose) |
+| `PRIVACY_POLICY_VERSION` | Shown on `GET /privacy/transparency` |
+| `PRIVACY_POLICY_URL` | Public policy link |
+| `DATA_PROTECTION_CONTACT` | DPO / privacy contact string |
 
-- `POST /viewing/event` — JSON body: `user_id`, `content_id`, `watch_seconds`, optional `rating` (1–5).
-- `GET /recommendations/{user_id}?top_k=10&exclude_watched=true` — hybrid scores from **scikit-learn** TruncatedSVD + **PyTorch** MLP; needs the same ML stack as content analysis (Docker image already installs it).
+Use **TLS** at the reverse proxy and **encrypted storage** for Postgres in production. See transparency endpoint for encryption and compliance notes.
 
-### Integration with streaming stacks
+---
 
-- **Data aggregator:** `POST /ingest/event` with `source` = `video_server` | `user_device` | `edge` | `infra`, plus `event_type` and JSON `payload`. Use `event_type: network_probe` and payload keys `bandwidth_mbps`, `latency_ms`, `congestion` to mirror `POST /network/probe` into the same forecast/ABR history. High-volume agents can use `POST /ingest/batch` (up to 500 events).
-- **Edge + ABR:** Register packaging/CDN edges with `POST /edges/register` (`edge_id`, `region`, `base_url`, `capacity_units`). Send `source: infra`, `event_type: edge_load`, `origin_id: <edge_id>`, payload `current_load` / `healthy` to simulate LB/cache telemetry. `POST /delivery/optimize` returns ABR ladder, chosen edge, forecast risk, and hints for cache, LB, P2P, and routing (wire to NGINX/HAProxy/Varnish as needed).
-- **Feedback loop:** `POST /feedback/interaction` stores structured interactions; `playback_quality_feedback` updates the tabular RL agent (same fields as `POST /quality/feedback` inside `payload`); `explicit_dislike`, `not_interested`, `rate`, and `rating` invalidate the hybrid recommender cache so the next `GET /recommendations` refits.
+## API overview
 
-## FFmpeg adaptive renditions
+Grouped by concern (all JSON unless noted):
+
+| Area | Methods | Paths (representative) |
+|------|---------|-------------------------|
+| Health & metrics | GET | `/health`, `/metrics` |
+| User prefs | PUT, GET | `/users/{user_id}/preferences` |
+| Privacy & GDPR-style | GET, PUT, GET, GET, POST | `/privacy/transparency`, `/privacy/consent`, `/privacy/consent/{user_id}`, `/privacy/export/{user_id}`, `/privacy/erasure` |
+| Network | POST, POST | `/network/probe`, `/network/forecast` |
+| ABR & delivery | POST | `/quality/recommend`, `/delivery/optimize` |
+| Quality RL feedback | POST | `/quality/feedback` |
+| Ingestion | POST | `/ingest/event`, `/ingest/batch` |
+| Edges | POST | `/edges/register` |
+| Viewing & recommend | POST, GET | `/viewing/event`, `/recommendations/{user_id}` |
+| Feedback & analytics | POST, GET, GET | `/feedback/interaction`, `/analytics/feedback/summary`, `/analytics/export/training` |
+| Content analysis | POST | `/content/analyze` (multipart) |
+| Models & ethics | POST, GET, POST, GET | `/models/metrics`, `/ethics/fairness-report`, `/ethics/fairness-reports` |
+
+---
+
+## Feature reference
+
+| Concept | Implementation |
+|--------|----------------|
+| Network monitoring | `POST /network/probe` → `network_samples`; Prometheus scrapes `/metrics`; Grafana in compose |
+| SNMP / gear metrics | Use `snmp_exporter` + Prometheus; forward summaries into `/network/probe` or ingest `event_type: network_probe` |
+| Viewer preferences | Postgres `user_preferences` via `/users/{id}/preferences` |
+| ABR / RL | Tabular Q-learning in `backend/app/services/quality_rl.py`; `fast_path` skips forecast + exploration |
+| Ladder / packaging | `POST /quality/recommend`; align with `scripts/transcode_abr.sh` and `quality_rl.LADDER` |
+| Forecasting | `POST /network/forecast` (trend baseline; swap for LSTM/ARIMA + Spark) |
+| CDN / LB examples | `configs/nginx.example.conf`, `configs/haproxy.example.cfg` |
+| P2P / SD-WAN | Not bundled; metrics and delivery hints support your edge / routing stack |
+| Content analysis | `POST /content/analyze` — CNN (ResNet-18), GRU transitions, TF–IDF themes (`requirements-analysis.txt`, ffmpeg in image) |
+| Recommendations | TruncatedSVD + PyTorch MLP hybrid; `GET /recommendations/{user_id}` |
+| Integration | Ingest hooks mirror probes and edge load; `/delivery/optimize` combines ABR + edge + hints |
+
+---
+
+## Workflows
+
+1. **ABR session:** set preferences → emit probes → `POST /quality/recommend` (or `/delivery/optimize` with edges registered) → player switches ladder → `POST /quality/feedback` (requires personalization consent if enforced).
+2. **Recommendations:** `POST /viewing/event` (and optional ratings) → `GET /recommendations/{user_id}`.
+3. **Central ingest:** agents `POST /ingest/event` or `/ingest/batch` (`video_server` | `user_device` | `edge` | `infra`); `network_probe` events can populate the same history as `/network/probe`.
+4. **Batch training:** `GET /analytics/export/training` (NDJSON) → Spark / cloud jobs; respect user `consent_model_training` / `consent_analytics` in export.
+5. **Privacy:** `GET /privacy/transparency` → user accepts via `PUT /privacy/consent` → optional `GET /privacy/export/{user_id}` or `POST /privacy/erasure` with `confirm: true`.
+
+### FFmpeg multi-bitrate (HLS)
 
 ```bash
 chmod +x scripts/transcode_abr.sh
 ./scripts/transcode_abr.sh /path/to/source.mp4 ./media/out
 ```
 
-Map manifest rung heights to the ladder in `quality_rl.LADDER` so server and client stay aligned.
+---
 
 ## Ethics & responsible use
 
-| Topic | What is implemented |
-|--------|----------------------|
-| **Data privacy** | **`GET /privacy/transparency`** — categories, purposes, rights, encryption/compliance notes (configure **`PRIVACY_POLICY_*`** / **`DATA_PROTECTION_CONTACT`** via env). **`PUT /privacy/consent`** / **`GET /privacy/consent/{user_id}`** — granular flags: personalization, analytics, model-training datasets. **`GET /privacy/export/{user_id}`** — portable JSON. **`POST /privacy/erasure`** with **`confirm=true`** — deletes user rows (DB + in-memory RL slot); pair with TLS and encrypted Postgres in production. |
-| **Fairness & bias** | **`POST /ethics/fairness-report`** / **`GET /ethics/fairness-reports`** — store slice metrics (e.g. demographic parity) from offline audits; training export **respects** `consent_model_training` and **`consent_analytics`** for user-device ingest. |
-| **Transparency & control** | Transparency payload documents all relevant API paths; users who set **`consent_personalization=false`** receive **403** on viewing, recommendations, feedback, and quality-feedback routes, and are **excluded** from collaborative filtering aggregates. |
+| Topic | Implementation |
+|--------|----------------|
+| **Privacy** | Transparency, granular consent, portable export, erasure; training export filtered by consent flags. |
+| **Fairness** | `POST /ethics/fairness-report` stores slice-level audit metrics from offline jobs. |
+| **Control** | `consent_personalization=false` → **403** on viewing, recommendations, and feedback routes; user excluded from CF aggregates. |
 
-## Technical challenges (and how this repo addresses them)
+Details: `GET /privacy/transparency`.
 
-| Challenge | Approach |
-|-----------|----------|
-| **Scalability** (volume of telemetry + training data) | `GET /analytics/export/training` returns **NDJSON** per stream for **Apache Spark**, AWS **Glue/EMR**, or S3 landing zones; compose supports **`--scale backend=N`**; offload heavy training to the batch job, not the request path. |
-| **Latency** (real-time ABR) | **`fast_path: true`** on `POST /quality/recommend` and `POST /delivery/optimize` skips forecast DB work and uses **heuristic-only** ladder selection (`policy: heuristic_fast`); pair with **edge** delivery from `/edges/register` + `/delivery/optimize`. |
-| **Integration** (existing CDN / origin) | **REST/OpenAPI** microservice style: ingest, ABR, recommendations, and delivery hints are separate routes; **`configs/nginx-microservices.example.conf`** shows LB across replicas. |
-| **Model accuracy** | **`POST /models/metrics`** ingests offline validation scores (e.g. from Spark/SageMaker); **`GET /analytics/feedback/summary`** aggregates user interactions; **`POST /feedback/interaction`** + viewing events feed export for **continuous retraining**. |
+---
+
+## Operational scale & latency
+
+| Goal | Mechanism |
+|------|-----------|
+| **Scale** | NDJSON export for Spark/AWS; `docker compose --scale backend`; external data lake for training |
+| **Low latency** | `fast_path: true` on `/quality/recommend` and `/delivery/optimize` |
+| **Integration** | REST/OpenAPI modules; nginx microservices example |
+| **Model quality** | `/models/metrics`, feedback + export loops, fairness reports |
+
+---
 
 ## Production notes
 
-- Persist RL policy (Redis/DB) if you run multiple API replicas.
-- Train deep RL / supervised rankers offline; serve checkpoints via the same `recommend` handler.
-- For **MongoDB** instead of Postgres, swap SQLAlchemy models for an ODM and keep the same REST shapes.
+- Persist the RL Q-table (e.g. Redis/DB) if you run multiple API replicas.
+- Replace heuristic / tabular models with served checkpoints behind the same route shapes.
+- For MongoDB instead of Postgres, swap the ORM layer and keep REST contracts.
 
-## License
+---
 
-See repository root for project documentation (`AI-Enhanced Video Streaming Service.pdf` / `.docx`).
+## License & reference docs
+
+Original project write-up (if present in repo root):
+
+- `AI-Enhanced Video Streaming Service.pdf`
+- `AI-Enhanced Video Streaming Service.docx`
